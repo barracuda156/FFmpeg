@@ -141,32 +141,29 @@ static int apply_filter(CoreImageContext *ctx, AVFilterLink *link, AVFrame *fram
         frame->height
     };
 
-    NSData *data = [NSData dataWithBytesNoCopy:frame->data[0]
-                           length:frame->height*frame->linesize[0]
-                           freeWhenDone:NO];
-
-    CIImage *ret = [(__bridge CIImage*)ctx->input_image initWithBitmapData:data
-                                                        bytesPerRow:frame->linesize[0]
-                                                        size:frame_size
-                                                        format:kCIFormatARGB8
-                                                        colorSpace:ctx->color_space]; //kCGColorSpaceGenericRGB
+    NSData *data = [[NSData alloc] initWithBytesNoCopy:frame->data[0]
+                                                length:frame->height*frame->linesize[0]
+                                                freeWhenDone:NO];
+    CIImage *ret = [(CIImage*)ctx->input_image initWithBitmapData:data
+                                                bytesPerRow:frame->linesize[0]
+                                                size:frame_size
+                                                format:kCIFormatARGB8
+                                                colorSpace:ctx->color_space]; // kCGColorSpaceGenericRGB
     if (!ret) {
         av_log(ctx, AV_LOG_ERROR, "Input image could not be initialized.\n");
         return AVERROR_EXTERNAL;
     }
 
     CIFilter *filter       = NULL;
-    CIImage *filter_input  = (__bridge CIImage*)ctx->input_image;
+    CIImage *filter_input  = (CIImage*)ctx->input_image;
     CIImage *filter_output = NULL;
 
     // successively apply all filters
     for (i = 0; i < ctx->num_filters; i++) {
         if (i) {
-            // set filter input to previous filter output
-            filter_input    = [(__bridge CIImage*)ctx->filters[i-1] valueForKey:kCIOutputImageKey];
+            filter_input = [(CIImage*)ctx->filters[i-1] valueForKey:kCIOutputImageKey];
             CGRect out_rect = [filter_input extent];
             if (out_rect.size.width > frame->width || out_rect.size.height > frame->height) {
-                // do not keep padded image regions after filtering
                 out_rect.origin.x    = 0.0f;
                 out_rect.origin.y    = 0.0f;
                 out_rect.size.width  = frame->width;
@@ -175,15 +172,13 @@ static int apply_filter(CoreImageContext *ctx, AVFilterLink *link, AVFrame *fram
             filter_input = [filter_input imageByCroppingToRect:out_rect];
         }
 
-        filter = (__bridge CIFilter*)ctx->filters[i];
-
-        // do not set input image for the first filter if used as video source
+        filter = (CIFilter*)ctx->filters[i];
         if (!ctx->is_video_source || i) {
             @try {
                 [filter setValue:filter_input forKey:kCIInputImageKey];
             } @catch (NSException *exception) {
                 if (![[exception name] isEqualToString:NSUndefinedKeyException]) {
-                    av_log(ctx, AV_LOG_ERROR, "An error occurred: %s.", [exception.reason UTF8String]);
+                    av_log(ctx, AV_LOG_ERROR, "An error occurred: %s.", [[exception reason] UTF8String]);
                     return AVERROR_EXTERNAL;
                 } else {
                     av_log(ctx, AV_LOG_WARNING, "Selected filter does not accept an input image.\n");
@@ -210,7 +205,7 @@ static int apply_filter(CoreImageContext *ctx, AVFilterLink *link, AVFrame *fram
         out_rect.size.height = frame->height;
     }
 
-    CGImageRef out = [(__bridge CIContext*)ctx->glctx createCGImage:filter_output
+    CGImageRef out = [(CIContext*)ctx->glctx createCGImage:filter_output
                                                       fromRect:out_rect];
 
     if (!out) {
@@ -245,11 +240,12 @@ static int apply_filter(CoreImageContext *ctx, AVFilterLink *link, AVFrame *fram
     CGRect rect = {{0,0},{frame->width, frame->height}};
     if (ctx->output_rect) {
         @try {
-            NSString *tmp_string = [NSString stringWithUTF8String:ctx->output_rect];
+            NSString *tmp_string = [[NSString alloc] initWithUTF8String:ctx->output_rect];
             NSRect tmp           = NSRectFromString(tmp_string);
             rect                 = NSRectToCGRect(tmp);
+            [tmp_string release];
         } @catch (NSException *exception) {
-            av_log(ctx, AV_LOG_ERROR, "An error occurred: %s.", [exception.reason UTF8String]);
+            av_log(ctx, AV_LOG_ERROR, "An error occurred: %s.", [[exception reason] UTF8String]);
             return AVERROR_EXTERNAL;
         }
         if (rect.size.width == 0.0f) {
@@ -405,7 +401,9 @@ av_log(ctx, AV_LOG_WARNING, "Value of \"%f\" for option \"%s\" is out of range [
 static CIFilter* create_filter(CoreImageContext *ctx, const char *filter_name, AVDictionary *filter_options)
 {
     // create filter object
-    CIFilter *filter = [CIFilter filterWithName:[NSString stringWithUTF8String:filter_name]];
+    NSString *filter_name_obj = [[NSString alloc] initWithUTF8String:filter_name];
+    CIFilter *filter = [CIFilter filterWithName:filter_name_obj];
+    [filter_name_obj release];
 
     // set default options
     [filter setDefaults];
@@ -436,9 +434,8 @@ static av_cold int init(AVFilterContext *fctx)
     }
 
     if (ctx->filter_string) {
-        // parse filter string (filter=name@opt=val@opt2=val2#name2@opt3=val3) for filters separated by #
         av_log(ctx, AV_LOG_DEBUG, "Filter_string: %s\n", ctx->filter_string);
-        ret = av_dict_parse_string(&filter_dict, ctx->filter_string, "@", "#", AV_DICT_MULTIKEY); // parse filter_name:all_filter_options
+        ret = av_dict_parse_string(&filter_dict, ctx->filter_string, "@", "#", AV_DICT_MULTIKEY);
         if (ret) {
             av_dict_free(&filter_dict);
             av_log(ctx, AV_LOG_ERROR, "Parsing of filters failed.\n");
@@ -478,13 +475,11 @@ static av_cold int init(AVFilterContext *fctx)
                     }
                 }
             }
-
-            ctx->filters[i] = CFBridgingRetain(create_filter(ctx, f->key, filter_options));
+            ctx->filters[i] = [create_filter(ctx, f->key, filter_options) retain];
             if (!ctx->filters[i]) {
                 av_log(ctx, AV_LOG_ERROR, "Could not create filter \"%s\".\n", f->key);
                 return AVERROR(EINVAL);
             }
-
             i++;
         }
     } else {
@@ -502,10 +497,10 @@ static av_cold int init(AVFilterContext *fctx)
 
     NSOpenGLPixelFormat *pixel_format = [[NSOpenGLPixelFormat alloc] initWithAttributes:(void *)&attr];
     ctx->color_space                  = CGColorSpaceCreateWithName(kCGColorSpaceGenericRGB);
-    ctx->glctx                        = CFBridgingRetain([CIContext contextWithCGLContext:CGLGetCurrentContext()
-                                                         pixelFormat:[pixel_format CGLPixelFormatObj]
-                                                         colorSpace:ctx->color_space
-                                                         options:nil]);
+    ctx->glctx = [[CIContext contextWithCGLContext:CGLGetCurrentContext()
+                                        pixelFormat:[pixel_format CGLPixelFormatObj]
+                                        colorSpace:ctx->color_space
+                                        options:nil] retain];
 
     if (!ctx->glctx) {
         av_log(ctx, AV_LOG_ERROR, "CIContext not created.\n");
@@ -513,7 +508,7 @@ static av_cold int init(AVFilterContext *fctx)
     }
 
     // Creating an empty input image as input container for the context
-    ctx->input_image = CFBridgingRetain([CIImage emptyImage]);
+    ctx->input_image = [[CIImage emptyImage] retain];
 
     return 0;
 }
@@ -540,14 +535,27 @@ static av_cold void uninit(AVFilterContext *fctx)
 
     CoreImageContext *ctx = fctx->priv;
 
-    SafeCFRelease(ctx->glctx);
-    SafeCFRelease(ctx->cgctx);
-    SafeCFRelease(ctx->color_space);
-    SafeCFRelease(ctx->input_image);
-
+    if (ctx->glctx) {
+        [(id)ctx->glctx release];
+        ctx->glctx = NULL;
+    }
+    if (ctx->cgctx) {
+        CGContextRelease(ctx->cgctx);
+        ctx->cgctx = NULL;
+    }
+    if (ctx->color_space) {
+        CFRelease(ctx->color_space);
+        ctx->color_space = NULL;
+    }
+    if (ctx->input_image) {
+        [(id)ctx->input_image release];
+        ctx->input_image = NULL;
+    }
     if (ctx->filters) {
         for (int i = 0; i < ctx->num_filters; i++) {
-            SafeCFRelease(ctx->filters[i]);
+            if (ctx->filters[i]) {
+                [(id)ctx->filters[i] release];
+            }
         }
         av_freep(&ctx->filters);
     }
