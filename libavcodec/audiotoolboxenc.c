@@ -261,7 +261,11 @@ static av_cold int ffat_init_encoder(AVCodecContext *avctx)
                           avctx->sample_fmt == AV_SAMPLE_FMT_DBL) ? kAudioFormatFlagIsFloat
                         : avctx->sample_fmt == AV_SAMPLE_FMT_U8 ? 0
                         : kAudioFormatFlagIsSignedInteger)
+#if defined HAVE_BIGENDIAN
+                        | kAudioFormatFlagIsPacked | kAudioFormatFlagIsBigEndian,
+#else
                         | kAudioFormatFlagIsPacked,
+#endif
         .mBytesPerPacket = av_get_bytes_per_sample(avctx->sample_fmt) * avctx->ch_layout.nb_channels,
         .mFramesPerPacket = 1,
         .mBytesPerFrame = av_get_bytes_per_sample(avctx->sample_fmt) * avctx->ch_layout.nb_channels,
@@ -396,7 +400,7 @@ static av_cold int ffat_init_encoder(AVCodecContext *avctx)
                               sizeof(at->quality), &at->quality);
 
     if (!AudioConverterGetPropertyInfo(at->converter, kAudioConverterCompressionMagicCookie,
-                                       &avctx->extradata_size, NULL) &&
+                                       (UInt32 *)&avctx->extradata_size, NULL) &&
         avctx->extradata_size) {
         int extradata_size = avctx->extradata_size;
         uint8_t *extradata;
@@ -413,7 +417,7 @@ static av_cold int ffat_init_encoder(AVCodecContext *avctx)
         }
         status = AudioConverterGetProperty(at->converter,
                                            kAudioConverterCompressionMagicCookie,
-                                           &extradata_size, extradata);
+                                           (UInt32 *)&extradata_size, extradata);
         if (status != 0) {
             av_log(avctx, AV_LOG_ERROR, "AudioToolbox cookie error: %i\n", (int)status);
             return AVERROR_UNKNOWN;
@@ -564,7 +568,7 @@ static int ffat_encode(AVCodecContext *avctx, AVPacket *avpkt,
     *got_packet_ptr = avctx->frame_size / at->frame_size;
 
     ret = AudioConverterFillComplexBuffer(at->converter, ffat_encode_callback, avctx,
-                                          got_packet_ptr, &out_buffers,
+                                          (UInt32 *)got_packet_ptr, &out_buffers,
                                           (avctx->frame_size > at->frame_size) ? NULL : &out_pkt_desc);
 
     ff_bufqueue_discard_all(&at->used_frame_queue);

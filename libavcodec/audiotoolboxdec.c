@@ -319,7 +319,11 @@ static av_cold int ffat_create_decoder(AVCodecContext *avctx,
     };
     AudioStreamBasicDescription out_format = {
         .mFormatID = kAudioFormatLinearPCM,
+#if defined HAVE_BIGENDIAN
+        .mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked | kAudioFormatFlagIsBigEndian,
+#else
         .mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+#endif
         .mFramesPerPacket = 1,
         .mBitsPerChannel = av_get_bytes_per_sample(sample_fmt) * 8,
     };
@@ -348,7 +352,7 @@ static av_cold int ffat_create_decoder(AVCodecContext *avctx,
         enum AVCodecID codec_id;
         int bit_rate;
         if (ff_mpa_decode_header(AV_RB32(pkt->data), &avctx->sample_rate,
-                                 &in_format.mChannelsPerFrame, &avctx->frame_size,
+                                 (UInt32 *)&in_format.mChannelsPerFrame, &avctx->frame_size,
                                  &bit_rate, &codec_id) < 0)
             return AVERROR_INVALIDDATA;
         avctx->bit_rate = bit_rate;
@@ -547,7 +551,7 @@ static int ffat_decode(AVCodecContext *avctx, AVFrame *frame,
     out_buffers.mBuffers[0].mData = at->decoded_data;
 
     ret = AudioConverterFillComplexBuffer(at->converter, ffat_decode_callback, avctx,
-                                          &frame->nb_samples, &out_buffers, NULL);
+                                          (UInt32 *)&frame->nb_samples, &out_buffers, NULL);
     if ((!ret || ret == 1) && frame->nb_samples) {
         if ((ret = ff_get_buffer(avctx, frame, 0)) < 0)
             return ret;
